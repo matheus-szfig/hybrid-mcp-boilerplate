@@ -88,6 +88,27 @@ SHAREPOINT_FILE_PATH=
 uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+### 3a. Run with Docker (recommended for dev)
+
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Compose v2.22+.
+
+```bash
+docker compose watch
+```
+
+This starts the API and a local PostgreSQL database. File changes are handled automatically:
+
+| What you change | What happens |
+|---|---|
+| Anything in `src/` or `main.py` | Compose syncs the file into the container, uvicorn reloads |
+| `pyproject.toml` or `uv.lock` | Image is rebuilt (`uv sync` re-runs), container restarts |
+| `Dockerfile.dev` | Image is rebuilt |
+
+The local Postgres runs on `localhost:5432` with:
+- user: `postgres`, password: `secret`, db: `hybrid_mcp`
+
+Make sure your `.env` has `DATABASE_HOST=db` (the Docker service name) when running via Compose.
+
 | Endpoint | Description |
 |---|---|
 | `http://localhost:8000/docs` | REST API docs (Swagger UI) |

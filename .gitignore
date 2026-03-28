@@ -48,6 +48,9 @@ override.tf.json
 words.txt
 sse_out.txt
 
+# Docker
+.dockerignore
+
 # OS
 .DS_Store
 Thumbs.db
