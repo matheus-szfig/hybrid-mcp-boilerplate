@@ -1,0 +1,121 @@
+# To activate this workflow, copy this file to .github/workflows/iac-deploy.yml
+# mkdir -p .github/workflows && cp iac/github-actions/iac-deploy.yml .github/workflows/
+
+name: IaC Deploy
+
+on:
+  push:
+    branches:
+      - dev   # PR merged into dev → deploy to dev
+      - main  # PR merged into main → deploy to prod
+    paths:
+      - "iac/terraform/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - prod
+      provider:
+        description: "Cloud provider"
+        required: true
+        default: "azure"
+        type: choice
+        options:
+          - azure
+          - aws
+          - gcp
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    environment: >-
+      ${{
+        github.event_name == 'workflow_dispatch' && inputs.environment ||
+        github.ref_name == 'main' && 'prod' ||
+        'dev'
+      }}
+
+    env:
+      TF_ENV: >-
+        ${{
+          github.event_name == 'workflow_dispatch' && inputs.environment ||
+          github.ref_name == 'main' && 'prod' ||
+          'dev'
+        }}
+      TF_PROVIDER: ${{ inputs.provider || 'azure' }}
+
+    name: Terraform Apply (${{ inputs.provider || 'azure' }} / ${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.ref_name == 'main' && 'prod' || 'dev' }})
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Azure OIDC ──────────────────────────────────────────────────────────
+      - name: Azure login
+        if: env.TF_PROVIDER == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set Azure ARM env vars
+        if: env.TF_PROVIDER == 'azure'
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}"             >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}"             >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_USE_OIDC=true"                                         >> $GITHUB_ENV
+
+      # ── AWS OIDC ────────────────────────────────────────────────────────────
+      - name: AWS login
+        if: env.TF_PROVIDER == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ secrets.AWS_REGION }}
+
+      # ── GCP OIDC ────────────────────────────────────────────────────────────
+      - name: GCP login
+        if: env.TF_PROVIDER == 'gcp'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account:            ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # ── Terraform ───────────────────────────────────────────────────────────
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.6"
+
+      - name: Terraform Init
+        working-directory: iac/terraform/${{ env.TF_PROVIDER }}
+        run: terraform init -backend-config=backends/${{ env.TF_ENV }}.conf
+
+      - name: Terraform Validate
+        working-directory: iac/terraform/${{ env.TF_PROVIDER }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: iac/terraform/${{ env.TF_PROVIDER }}
+        run: |
+          terraform plan \
+            -var-file=envs/${{ env.TF_ENV }}.tfvars \
+            -var="db_password=${{ secrets.DB_PASSWORD }}" \
+            -no-color \
+            -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: iac/terraform/${{ env.TF_PROVIDER }}
+        run: terraform apply -auto-approve tfplan

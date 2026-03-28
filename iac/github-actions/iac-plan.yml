@@ -1,0 +1,114 @@
+# To activate this workflow, copy this file to .github/workflows/iac-plan.yml
+# mkdir -p .github/workflows && cp iac/github-actions/iac-plan.yml .github/workflows/
+
+name: IaC Plan
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+    paths:
+      - "iac/terraform/**"
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+
+    # PR targeting dev → plan against dev, PR targeting main → plan against prod
+    environment: ${{ github.base_ref == 'main' && 'prod' || 'dev' }}
+
+    env:
+      TF_ENV:      ${{ github.base_ref == 'main' && 'prod' || 'dev' }}
+      TF_PROVIDER: ${{ inputs.provider || 'azure' }}
+
+    name: Terraform Plan (${{ github.base_ref == 'main' && 'prod' || 'dev' }} / ${{ inputs.provider || 'azure' }})
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Azure OIDC ──────────────────────────────────────────────────────────
+      - name: Azure login
+        if: env.TF_PROVIDER == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set Azure ARM env vars
+        if: env.TF_PROVIDER == 'azure'
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}"         >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}"         >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_USE_OIDC=true"                                     >> $GITHUB_ENV
+
+      # ── AWS OIDC ────────────────────────────────────────────────────────────
+      - name: AWS login
+        if: env.TF_PROVIDER == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ secrets.AWS_REGION }}
+
+      # ── GCP OIDC ────────────────────────────────────────────────────────────
+      - name: GCP login
+        if: env.TF_PROVIDER == 'gcp'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account:            ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # ── Terraform ───────────────────────────────────────────────────────────
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.6"
+
+      - name: Terraform Init
+        working-directory: iac/terraform/${{ env.TF_PROVIDER }}
+        run: terraform init -backend-config=backends/${{ env.TF_ENV }}.conf
+
+      - name: Terraform Validate
+        working-directory: iac/terraform/${{ env.TF_PROVIDER }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: iac/terraform/${{ env.TF_PROVIDER }}
+        run: |
+          terraform plan \
+            -var-file=envs/${{ env.TF_ENV }}.tfvars \
+            -var="db_password=${{ secrets.DB_PASSWORD }}" \
+            -no-color \
+            -out=tfplan 2>&1 | tee plan_output.txt
+        continue-on-error: true
+
+      - name: Post Plan to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const env      = process.env.TF_ENV;
+            const provider = process.env.TF_PROVIDER;
+            const output = fs.readFileSync(`iac/terraform/${provider}/plan_output.txt`, 'utf8');
+            const truncated = output.length > 60000
+              ? output.slice(0, 60000) + '\n... (truncated)'
+              : output;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Terraform Plan (${provider} / ${env})\n\`\`\`\n${truncated}\n\`\`\``
+            });
+
+      - name: Fail on plan error
+        if: steps.plan.outcome == 'failure'
+        run: exit 1

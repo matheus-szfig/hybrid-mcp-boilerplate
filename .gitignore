@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[oc]
+*.pyd
+*.so
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+env/
+
+# Test & coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Logs
+*.log
+
+# Terraform — generated, never commit
+**/.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.backup
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# *.auto.tfvars are auto-loaded by Terraform and may contain real secrets locally
+*.auto.tfvars
+*.auto.tfvars.json
+
+# Note: .terraform.lock.hcl SHOULD be committed — it pins provider versions
+
+# Sensitive env files
+.env
+.env.local
+.env.*.local
+
+# Runtime files
+words.txt
+sse_out.txt
+
+# OS
+.DS_Store
+Thumbs.db
